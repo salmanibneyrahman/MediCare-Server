@@ -168,19 +168,38 @@ app.post("/api/users", async (req, res) => {
                 .status(400)
                 .json({ error: "Name and email are required" });
         }
+
+        // Only these two can be self-selected at signup.
+        // "admin" must never be grantable from the client.
+        const allowedSelfRoles = ["patient", "doctor"];
+        const safeRole = allowedSelfRoles.includes(role) ? role : "patient";
+
         const existingUser = await usersCollection.findOne({ email });
         if (existingUser) {
+            // Fill in profile fields that are still empty, but never
+            // touch an existing role — only an admin may change that.
+            const patch = {};
+            if (phone && !existingUser.phone) patch.phone = phone;
+            if (gender && !existingUser.gender) patch.gender = gender;
+            if (photo && !existingUser.photo) patch.photo = photo;
+            if (!existingUser.role) patch.role = safeRole;
+
+            if (Object.keys(patch).length > 0) {
+                await usersCollection.updateOne({ email }, { $set: patch });
+            }
+            const user = await usersCollection.findOne({ email });
             return res
                 .status(200)
-                .json({ message: "User already exists", existing: true, user: existingUser });
+                .json({ message: "User already exists", existing: true, user });
         }
+
         const newUser = {
             name,
             email,
             photo: photo || "",
             phone: phone || "",
             gender: gender || "",
-            role: role || "patient",
+            role: safeRole,
             status: "active",
             createdAt: new Date(),
         };
