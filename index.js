@@ -169,28 +169,44 @@ app.post("/api/users", async (req, res) => {
                 .json({ error: "Name and email are required" });
         }
 
-        // Only these two can be self-selected at signup.
-        // "admin" must never be grantable from the client.
+        // Only these two may be self-selected at signup.
+        // "admin" must never be settable from the client.
         const allowedSelfRoles = ["patient", "doctor"];
-        const safeRole = allowedSelfRoles.includes(role) ? role : "patient";
+        const requestedRole = allowedSelfRoles.includes(role) ? role : null;
 
         const existingUser = await usersCollection.findOne({ email });
+
         if (existingUser) {
-            // Fill in profile fields that are still empty, but never
-            // touch an existing role — only an admin may change that.
             const patch = {};
+
+            // Fill in profile fields that are still blank.
             if (phone && !existingUser.phone) patch.phone = phone;
             if (gender && !existingUser.gender) patch.gender = gender;
             if (photo && !existingUser.photo) patch.photo = photo;
-            if (!existingUser.role) patch.role = safeRole;
+            if (name && !existingUser.name) patch.name = name;
+            if (!existingUser.status) patch.status = "active";
+            if (!existingUser.createdAt) patch.createdAt = new Date();
+
+            // Role: never touch an admin, otherwise accept the requested one.
+            // This is what makes the two racing signup calls agree.
+            if (existingUser.role !== "admin") {
+                if (requestedRole && existingUser.role !== requestedRole) {
+                    patch.role = requestedRole;
+                } else if (!existingUser.role) {
+                    patch.role = "patient";
+                }
+            }
 
             if (Object.keys(patch).length > 0) {
                 await usersCollection.updateOne({ email }, { $set: patch });
             }
+
             const user = await usersCollection.findOne({ email });
-            return res
-                .status(200)
-                .json({ message: "User already exists", existing: true, user });
+            return res.status(200).json({
+                message: "User already exists",
+                existing: true,
+                user,
+            });
         }
 
         const newUser = {
@@ -199,14 +215,19 @@ app.post("/api/users", async (req, res) => {
             photo: photo || "",
             phone: phone || "",
             gender: gender || "",
-            role: safeRole,
+            role: requestedRole || "patient",
             status: "active",
             createdAt: new Date(),
         };
         const result = await usersCollection.insertOne(newUser);
+        const user = await usersCollection.findOne({
+            _id: result.insertedId,
+        });
+
         res.status(201).json({
             message: "User created successfully",
             insertedId: result.insertedId,
+            user,
         });
     } catch {
         res.status(500).json({ error: "Internal server error" });
@@ -301,8 +322,17 @@ app.get("/api/doctors", async (req, res) => {
             sortBy,
             page = 1,
             limit = 9,
+            includeUnverified = "true",
         } = req.query;
-        let query = { verificationStatus: "verified" };
+
+        let query = {};
+
+        if (includeUnverified === "true") {
+            query.verificationStatus = { $in: ["verified", "pending"] };
+        } else {
+            query.verificationStatus = "verified";
+        }
+
         if (search) {
             query.$or = [
                 { doctorName: { $regex: search, $options: "i" } },
@@ -313,20 +343,32 @@ app.get("/api/doctors", async (req, res) => {
         if (specialization && specialization !== "all") {
             query.specialization = { $regex: specialization, $options: "i" };
         }
+
         let sortOptions = {};
         if (sortBy === "fee_asc") sortOptions = { consultationFee: 1 };
         else if (sortBy === "fee_desc") sortOptions = { consultationFee: -1 };
         else if (sortBy === "experience") sortOptions = { experience: -1 };
         else if (sortBy === "rating") sortOptions = { averageRating: -1 };
         else sortOptions = { createdAt: -1 };
+
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const total = await doctorsCollection.countDocuments(query);
         const doctors = await doctorsCollection
-            .find(query)
-            .sort(sortOptions)
-            .skip(skip)
-            .limit(parseInt(limit))
+            .aggregate([
+                { $match: query },
+                {
+                    $addFields: {
+                        isVerified: {
+                            $eq: ["$verificationStatus", "verified"],
+                        },
+                    },
+                },
+                { $sort: { isVerified: -1, ...sortOptions } },
+                { $skip: skip },
+                { $limit: parseInt(limit) },
+            ])
             .toArray();
+
         res.status(200).json({
             doctors,
             total,
@@ -430,9 +472,18 @@ app.post("/api/doctors", verifyToken, async (req, res) => {
                 .status(409)
                 .json({ error: "Doctor profile already exists" });
         }
+        let profileImage = doctorData.profileImage || "";
+        if (!profileImage) {
+            const account = await usersCollection.findOne({
+                email: tokenEmail,
+            });
+            profileImage = account?.photo || account?.image || "";
+        }
+
         const newDoctor = {
             ...doctorData,
             email: tokenEmail,
+            profileImage,
             verificationStatus: "pending",
             averageRating: 0,
             totalReviews: 0,
