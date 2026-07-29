@@ -1484,7 +1484,12 @@ app.use((req, res) => {
 });
 
 // ─── START SERVER ─────────────────────────────
-app.listen(PORT, () => {
-    console.log(`MediCare Connect API running on port ${PORT}`);
-    console.log(`JWKS endpoint: ${JWKS_URL}`);
-});
+if (process.env.NODE_ENV !== "production") {
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => {
+        console.log(`MediCare Connect API running on port ${PORT}`);
+        console.log(`JWKS endpoint: ${JWKS_URL}`);
+    });
+}
+
+module.exports = app;
