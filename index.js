@@ -36,7 +36,7 @@ let prescriptionsCollection;
 
 async function connectDB() {
     try {
-        await client.connect();
+        // await client.connect();
         const db = client.db("MediCare");
         usersCollection = db.collection("user");
         doctorsCollection = db.collection("doctors");
