@@ -70,7 +70,7 @@ connectDB().catch(err => {
 });
 
 // ─── JWKS-BASED JWT VERIFICATION ─────────────
-const { createRemoteJWKSet, jwtVerify } = require("jose");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 
 const JWKS_URL = process.env.FRONTEND_URL
     ? `${process.env.FRONTEND_URL}/api/auth/jwks`

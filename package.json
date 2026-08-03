@@ -15,8 +15,11 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "jose": "^6.2.3",
+    "jose-cjs": "latest",
     "mongodb": "^7.4.0",
     "stripe": "^22.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
   }
 }
