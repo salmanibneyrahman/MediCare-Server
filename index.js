@@ -30,6 +30,7 @@ const client = new MongoClient(uri, {
     socketTimeoutMS: 45000,
 });
 
+let cachedClient = null;
 let cachedDb = null;
 let usersCollection;
 let doctorsCollection;
@@ -39,12 +40,16 @@ let paymentsCollection;
 let prescriptionsCollection;
 
 async function connectDB() {
-    if (cachedDb) {
+    if (cachedClient && cachedDb) {
         return cachedDb;
     }
 
     try {
-        await client.connect();
+        if (!cachedClient) {
+            await client.connect();
+            cachedClient = client;
+        }
+
         const db = client.db("MediCare");
 
         usersCollection = db.collection("user");
@@ -55,13 +60,16 @@ async function connectDB() {
         prescriptionsCollection = db.collection("prescriptions");
 
         cachedDb = db;
-        console.log("Connected to MongoDB Atlas");
+        console.log("Connected to MongoDB Atlas successfully");
         return db;
     } catch (error) {
         console.error("MongoDB connection error:", error);
+        cachedClient = null;
+        cachedDb = null;
         throw error;
     }
 }
+
 
 // Connect immediately
 connectDB().catch(err => {
