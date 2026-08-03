@@ -33,10 +33,13 @@ let appointmentsCollection;
 let reviewsCollection;
 let paymentsCollection;
 let prescriptionsCollection;
+let isConnected = false;
 
 async function connectDB() {
+    if (isConnected) return;
+
     try {
-        // await client.connect();
+        await client.connect();
         const db = client.db("MediCare");
         usersCollection = db.collection("user");
         doctorsCollection = db.collection("doctors");
@@ -44,14 +47,33 @@ async function connectDB() {
         reviewsCollection = db.collection("reviews");
         paymentsCollection = db.collection("payments");
         prescriptionsCollection = db.collection("prescriptions");
+        isConnected = true;
         console.log("Connected to MongoDB Atlas - MediCare Database");
     } catch (error) {
         console.error("MongoDB connection error:", error);
-        process.exit(1);
+        throw error;
     }
 }
 
-connectDB();
+// Connect on startup
+connectDB().catch(err => {
+    console.error("Failed to connect to MongoDB:", err);
+});
+
+// Middleware to ensure DB connection
+const ensureDB = async (req, res, next) => {
+    try {
+        if (!isConnected) {
+            await connectDB();
+        }
+        next();
+    } catch (error) {
+        res.status(500).json({ error: "Database connection failed" });
+    }
+};
+
+// Apply DB middleware to all routes
+app.use(ensureDB);
 
 // ─── JWKS-BASED JWT VERIFICATION ─────────────
 const { createRemoteJWKSet, jwtVerify } = require("jose");
@@ -169,8 +191,6 @@ app.post("/api/users", async (req, res) => {
                 .json({ error: "Name and email are required" });
         }
 
-        // Only these two may be self-selected at signup.
-        // "admin" must never be settable from the client.
         const allowedSelfRoles = ["patient", "doctor"];
         const requestedRole = allowedSelfRoles.includes(role) ? role : null;
 
@@ -179,7 +199,6 @@ app.post("/api/users", async (req, res) => {
         if (existingUser) {
             const patch = {};
 
-            // Fill in profile fields that are still blank.
             if (phone && !existingUser.phone) patch.phone = phone;
             if (gender && !existingUser.gender) patch.gender = gender;
             if (photo && !existingUser.photo) patch.photo = photo;
@@ -187,8 +206,6 @@ app.post("/api/users", async (req, res) => {
             if (!existingUser.status) patch.status = "active";
             if (!existingUser.createdAt) patch.createdAt = new Date();
 
-            // Role: never touch an admin, otherwise accept the requested one.
-            // This is what makes the two racing signup calls agree.
             if (existingUser.role !== "admin") {
                 if (requestedRole && existingUser.role !== requestedRole) {
                     patch.role = requestedRole;
@@ -678,6 +695,10 @@ app.post("/api/appointments", verifyToken, async (req, res) => {
                 .status(400)
                 .json({ error: "Required fields missing" });
         }
+
+        // Get patient info
+        const patientDoc = await usersCollection.findOne({ email: patientEmail });
+
         const newAppointment = {
             patientId,
             patientName: patientName || "",
@@ -1083,6 +1104,12 @@ app.post("/api/payments", verifyToken, async (req, res) => {
                 error: "Payment already recorded for this appointment",
             });
         }
+
+        // Get appointment info
+        const apptDoc = await appointmentsCollection.findOne({
+            _id: new ObjectId(appointmentId),
+        });
+
         const payment = {
             appointmentId,
             patientId,
@@ -1195,6 +1222,12 @@ app.post(
                     .status(409)
                     .json({ error: "Payment already recorded" });
             }
+
+            // Get appointment info
+            const apptDoc = await appointmentsCollection.findOne({
+                _id: new ObjectId(appointmentId),
+            });
+
             const payment = {
                 appointmentId,
                 patientId,
@@ -1493,7 +1526,6 @@ app.use((req, res) => {
 
 // ─── START SERVER ─────────────────────────────
 if (process.env.NODE_ENV !== "production") {
-    const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
         console.log(`MediCare Connect API running on port ${PORT}`);
         console.log(`JWKS endpoint: ${JWKS_URL}`);
