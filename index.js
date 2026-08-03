@@ -7,7 +7,6 @@ const cors = require("cors");
 const { MongoClient, ObjectId } = require("mongodb");
 
 const app = express();
-const PORT = process.env.PORT || 5000;
 
 app.use(
     cors({
@@ -23,57 +22,52 @@ app.use(
 
 app.use(express.json());
 
-// ─── MONGODB CONNECTION ───────────────────────
+// ─── MONGODB CONNECTION (VERCEL OPTIMIZED) ───────────────────────
 const uri = process.env.MONGODB_URI;
-const client = new MongoClient(uri);
+const client = new MongoClient(uri, {
+    maxPoolSize: 10,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+});
 
+let cachedDb = null;
 let usersCollection;
 let doctorsCollection;
 let appointmentsCollection;
 let reviewsCollection;
 let paymentsCollection;
 let prescriptionsCollection;
-let isConnected = false;
 
 async function connectDB() {
-    if (isConnected) return;
+    if (cachedDb) {
+        return cachedDb;
+    }
 
     try {
         await client.connect();
         const db = client.db("MediCare");
+
         usersCollection = db.collection("user");
         doctorsCollection = db.collection("doctors");
         appointmentsCollection = db.collection("appointments");
         reviewsCollection = db.collection("reviews");
         paymentsCollection = db.collection("payments");
         prescriptionsCollection = db.collection("prescriptions");
-        isConnected = true;
-        console.log("Connected to MongoDB Atlas - MediCare Database");
+
+        cachedDb = db;
+        console.log("Connected to MongoDB Atlas");
+        return db;
     } catch (error) {
         console.error("MongoDB connection error:", error);
         throw error;
     }
 }
 
-// Connect on startup
+// Connect immediately
 connectDB().catch(err => {
     console.error("Failed to connect to MongoDB:", err);
+    process.exit(1);
 });
-
-// Middleware to ensure DB connection
-const ensureDB = async (req, res, next) => {
-    try {
-        if (!isConnected) {
-            await connectDB();
-        }
-        next();
-    } catch (error) {
-        res.status(500).json({ error: "Database connection failed" });
-    }
-};
-
-// Apply DB middleware to all routes
-app.use(ensureDB);
 
 // ─── JWKS-BASED JWT VERIFICATION ─────────────
 const { createRemoteJWKSet, jwtVerify } = require("jose");
@@ -126,7 +120,8 @@ async function verifyAdmin(req, res, next) {
             return res.status(403).json({ error: "Forbidden: Admins only" });
         }
         next();
-    } catch {
+    } catch (error) {
+        console.error("verifyAdmin error:", error);
         return res.status(500).json({ error: "Server error" });
     }
 }
@@ -140,14 +135,27 @@ async function verifyDoctor(req, res, next) {
             return res.status(403).json({ error: "Forbidden: Doctors only" });
         }
         next();
-    } catch {
+    } catch (error) {
+        console.error("verifyDoctor error:", error);
         return res.status(500).json({ error: "Server error" });
     }
 }
 
 // ─── HEALTH CHECK ─────────────────────────────
-app.get("/", (req, res) => {
-    res.status(200).json({ message: "MediCare Connect API is running" });
+app.get("/", async (req, res) => {
+    try {
+        await connectDB();
+        res.status(200).json({
+            message: "MediCare Connect API is running",
+            database: "connected",
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        res.status(500).json({
+            message: "API running but database connection failed",
+            error: error.message
+        });
+    }
 });
 
 // ─────────────────────────────────────────────
@@ -158,7 +166,8 @@ app.get("/api/users", verifyToken, verifyAdmin, async (req, res) => {
     try {
         const users = await usersCollection.find({}).toArray();
         res.status(200).json(users);
-    } catch {
+    } catch (error) {
+        console.error("GET /api/users error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -177,7 +186,8 @@ app.get("/api/users/:email", verifyToken, async (req, res) => {
         const user = await usersCollection.findOne({ email });
         if (!user) return res.status(404).json({ error: "User not found" });
         res.status(200).json(user);
-    } catch {
+    } catch (error) {
+        console.error("GET /api/users/:email error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -246,7 +256,8 @@ app.post("/api/users", async (req, res) => {
             insertedId: result.insertedId,
             user,
         });
-    } catch {
+    } catch (error) {
+        console.error("POST /api/users error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -273,7 +284,8 @@ app.patch("/api/users/:email", verifyToken, async (req, res) => {
         res
             .status(200)
             .json({ message: "User updated successfully", result });
-    } catch {
+    } catch (error) {
+        console.error("PATCH /api/users/:email error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -291,7 +303,8 @@ app.delete("/api/users/:id", verifyToken, verifyAdmin, async (req, res) => {
             return res.status(404).json({ error: "User not found" });
         }
         res.status(200).json({ message: "User deleted successfully" });
-    } catch {
+    } catch (error) {
+        console.error("DELETE /api/users/:id error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -321,7 +334,8 @@ app.patch(
             res
                 .status(200)
                 .json({ message: `User ${status} successfully` });
-        } catch {
+        } catch (error) {
+            console.error("PATCH /api/users/:id/status error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -392,7 +406,8 @@ app.get("/api/doctors", async (req, res) => {
             page: parseInt(page),
             totalPages: Math.ceil(total / parseInt(limit)),
         });
-    } catch {
+    } catch (error) {
+        console.error("GET /api/doctors error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -408,7 +423,8 @@ app.get(
                 .sort({ createdAt: -1 })
                 .toArray();
             res.status(200).json(doctors);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/admin/doctors error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -435,7 +451,8 @@ app.get(
                     .json({ error: "Doctor profile not found" });
             }
             res.status(200).json(doctor);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/doctors/profile/:email error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -449,7 +466,8 @@ app.get("/api/doctors/featured", async (req, res) => {
             .limit(6)
             .toArray();
         res.status(200).json(doctors);
-    } catch {
+    } catch (error) {
+        console.error("GET /api/doctors/featured error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -467,7 +485,8 @@ app.get("/api/doctors/:id", async (req, res) => {
             return res.status(404).json({ error: "Doctor not found" });
         }
         res.status(200).json(doctor);
-    } catch {
+    } catch (error) {
+        console.error("GET /api/doctors/:id error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -512,7 +531,8 @@ app.post("/api/doctors", verifyToken, async (req, res) => {
             message: "Doctor profile created successfully",
             insertedId: result.insertedId,
         });
-    } catch {
+    } catch (error) {
+        console.error("POST /api/doctors error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -546,7 +566,8 @@ app.patch("/api/doctors/:id", verifyToken, async (req, res) => {
         res
             .status(200)
             .json({ message: "Doctor updated successfully", result });
-    } catch {
+    } catch (error) {
+        console.error("PATCH /api/doctors/:id error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -594,7 +615,8 @@ app.patch(
             res
                 .status(200)
                 .json({ message: "Doctor verification status updated" });
-        } catch {
+        } catch (error) {
+            console.error("PATCH /api/doctors/:id/verify error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -615,7 +637,8 @@ app.get(
                 .sort({ createdAt: -1 })
                 .toArray();
             res.status(200).json(appointments);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/appointments error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -638,7 +661,8 @@ app.get(
                 .sort({ createdAt: -1 })
                 .toArray();
             res.status(200).json(appointments);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/appointments/patient/:patientId error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -666,7 +690,8 @@ app.get(
                 .sort({ createdAt: -1 })
                 .toArray();
             res.status(200).json(appointments);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/appointments/doctor/:doctorId error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -696,7 +721,6 @@ app.post("/api/appointments", verifyToken, async (req, res) => {
                 .json({ error: "Required fields missing" });
         }
 
-        // Get patient info
         const patientDoc = await usersCollection.findOne({ email: patientEmail });
 
         const newAppointment = {
@@ -722,7 +746,8 @@ app.post("/api/appointments", verifyToken, async (req, res) => {
             message: "Appointment created successfully",
             insertedId: result.insertedId,
         });
-    } catch {
+    } catch (error) {
+        console.error("POST /api/appointments error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -766,7 +791,8 @@ app.patch("/api/appointments/:id", verifyToken, async (req, res) => {
         res
             .status(200)
             .json({ message: "Appointment updated successfully", result });
-    } catch {
+    } catch (error) {
+        console.error("PATCH /api/appointments/:id error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -811,7 +837,8 @@ app.delete(
             res
                 .status(200)
                 .json({ message: "Appointment cancelled successfully" });
-        } catch {
+        } catch (error) {
+            console.error("DELETE /api/appointments/:id error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -829,7 +856,8 @@ app.get("/api/reviews", async (req, res) => {
             .limit(10)
             .toArray();
         res.status(200).json(reviews);
-    } catch {
+    } catch (error) {
+        console.error("GET /api/reviews error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -842,7 +870,8 @@ app.get("/api/reviews/doctor/:doctorId", async (req, res) => {
             .sort({ createdAt: -1 })
             .toArray();
         res.status(200).json(reviews);
-    } catch {
+    } catch (error) {
+        console.error("GET /api/reviews/doctor/:doctorId error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -864,7 +893,8 @@ app.get(
                 .sort({ createdAt: -1 })
                 .toArray();
             res.status(200).json(reviews);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/reviews/patient/:patientId error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -927,7 +957,8 @@ app.post("/api/reviews", verifyToken, async (req, res) => {
             message: "Review added successfully",
             insertedId: result.insertedId,
         });
-    } catch {
+    } catch (error) {
+        console.error("POST /api/reviews error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -984,7 +1015,8 @@ app.patch("/api/reviews/:id", verifyToken, async (req, res) => {
             );
         }
         res.status(200).json({ message: "Review updated successfully" });
-    } catch {
+    } catch (error) {
+        console.error("PATCH /api/reviews/:id error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -1028,7 +1060,8 @@ app.delete("/api/reviews/:id", verifyToken, async (req, res) => {
             );
         }
         res.status(200).json({ message: "Review deleted successfully" });
-    } catch {
+    } catch (error) {
+        console.error("DELETE /api/reviews/:id error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -1048,7 +1081,8 @@ app.get(
                 .sort({ paymentDate: -1 })
                 .toArray();
             res.status(200).json(payments);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/payments error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -1071,7 +1105,8 @@ app.get(
                 .sort({ paymentDate: -1 })
                 .toArray();
             res.status(200).json(payments);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/payments/patient/:patientId error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -1105,7 +1140,6 @@ app.post("/api/payments", verifyToken, async (req, res) => {
             });
         }
 
-        // Get appointment info
         const apptDoc = await appointmentsCollection.findOne({
             _id: new ObjectId(appointmentId),
         });
@@ -1139,7 +1173,8 @@ app.post("/api/payments", verifyToken, async (req, res) => {
             message: "Payment recorded successfully",
             insertedId: result.insertedId,
         });
-    } catch {
+    } catch (error) {
+        console.error("POST /api/payments error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -1183,6 +1218,7 @@ app.post(
                 paymentIntentId: paymentIntent.id,
             });
         } catch (error) {
+            console.error("POST /api/stripe/create-payment-intent error:", error);
             res
                 .status(500)
                 .json({ error: error.message || "Stripe error" });
@@ -1223,7 +1259,6 @@ app.post(
                     .json({ error: "Payment already recorded" });
             }
 
-            // Get appointment info
             const apptDoc = await appointmentsCollection.findOne({
                 _id: new ObjectId(appointmentId),
             });
@@ -1258,6 +1293,7 @@ app.post(
                 insertedId: result.insertedId,
             });
         } catch (error) {
+            console.error("POST /api/stripe/confirm-payment error:", error);
             res
                 .status(500)
                 .json({ error: error.message || "Confirmation error" });
@@ -1296,7 +1332,8 @@ app.get(
                 appointmentId,
             });
             res.status(200).json(prescription || null);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/prescriptions/appointment/:appointmentId error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -1319,7 +1356,8 @@ app.get(
                 .sort({ createdAt: -1 })
                 .toArray();
             res.status(200).json(prescriptions);
-        } catch {
+        } catch (error) {
+            console.error("GET /api/prescriptions/patient/:patientId error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -1369,7 +1407,8 @@ app.post(
                 message: "Prescription created successfully",
                 insertedId: result.insertedId,
             });
-        } catch {
+        } catch (error) {
+            console.error("POST /api/prescriptions error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -1408,7 +1447,8 @@ app.patch(
                 message: "Prescription updated successfully",
                 result,
             });
-        } catch {
+        } catch (error) {
+            console.error("PATCH /api/prescriptions/:id error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -1439,7 +1479,8 @@ app.get("/api/stats", async (req, res) => {
             totalAppointments,
             totalReviews,
         });
-    } catch {
+    } catch (error) {
+        console.error("GET /api/stats error:", error);
         res.status(500).json({ error: "Internal server error" });
     }
 });
@@ -1513,7 +1554,8 @@ app.get(
                 appointmentsByStatus,
                 monthlyAppointments,
             });
-        } catch {
+        } catch (error) {
+            console.error("GET /api/admin/analytics error:", error);
             res.status(500).json({ error: "Internal server error" });
         }
     }
@@ -1524,8 +1566,9 @@ app.use((req, res) => {
     res.status(404).json({ error: "Route not found" });
 });
 
-// ─── START SERVER ─────────────────────────────
+// ─── START SERVER (LOCAL ONLY) ─────────────────────────────
 if (process.env.NODE_ENV !== "production") {
+    const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
         console.log(`MediCare Connect API running on port ${PORT}`);
         console.log(`JWKS endpoint: ${JWKS_URL}`);
