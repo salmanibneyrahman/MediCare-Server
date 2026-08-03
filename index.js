@@ -876,6 +876,7 @@ app.post("/api/reviews", verifyToken, async (req, res) => {
         const newReview = {
             patientId,
             patientName: patientName || user?.name || "",
+            patientPhoto: user?.photo || user?.image || "",
             doctorId,
             doctorName: doctorName || "",
             rating: parseInt(rating),
