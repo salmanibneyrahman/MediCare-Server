@@ -8,22 +8,32 @@ const { MongoClient, ObjectId } = require("mongodb");
 
 const app = express();
 
+const ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://medicare-live.vercel.app",
+    process.env.FRONTEND_URL,
+].filter(Boolean);
+
 app.use(
     cors({
-        origin: [
-            "http://localhost:3000",
-            "https://medicare-live.vercel.app",
-            process.env.FRONTEND_URL
-        ].filter(Boolean),
+        origin: ALLOWED_ORIGINS,
         credentials: true,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allowedHeaders: ["Content-Type", "Authorization"],
     })
 );
 
-app.options('*', cors()); 
-
 app.use(express.json());
+
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (err) {
+        console.error("DB not ready:", err);
+        res.status(503).json({ error: "Database unavailable" });
+    }
+});
 
 // ─── MONGODB CONNECTION (VERCEL OPTIMIZED) ───────────────────────
 const uri = process.env.MONGODB_URI;
@@ -77,7 +87,6 @@ async function connectDB() {
 // Connect immediately
 connectDB().catch(err => {
     console.error("Failed to connect to MongoDB:", err);
-    process.exit(1);
 });
 
 // ─── JWKS-BASED JWT VERIFICATION ─────────────
@@ -1575,6 +1584,12 @@ app.get(
 // ─── 404 HANDLER ──────────────────────────────
 app.use((req, res) => {
     res.status(404).json({ error: "Route not found" });
+});
+
+// ─── ERROR HANDLER ────────────────────────────
+app.use((err, req, res, next) => {
+    console.error("Unhandled error:", err);
+    res.status(500).json({ error: "Internal server error" });
 });
 
 // ─── START SERVER (LOCAL ONLY) ─────────────────────────────
